@@ -1,13 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Clock, LogIn, LogOut, MapPin, User, Lock, AlertCircle, CheckCircle, Navigation } from 'lucide-react';
 
-// ERP Configuration (use server/client-consistent values)
-const erpConfig = {
-  url: process.env.NEXT_PUBLIC_ERP_URL || 'https://your-erp.com',
-  apiEndpoint: process.env.NEXT_PUBLIC_ERP_API_ENDPOINT || '/jsonrpc',
-  database: process.env.NEXT_PUBLIC_ODOO_DB || 'your_db',
-};
-
 export default function AttendanceApp() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -16,19 +9,28 @@ export default function AttendanceApp() {
   const [status, setStatus] = useState(null);
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
-  const [currentTime, setCurrentTime] = useState(null);
-  const [isMounted, setIsMounted] = useState(false);
+  const [currentTime, setCurrentTime] = useState(new Date());
   const [location, setLocation] = useState({ lat: null, lng: null });
   const [sessionData, setSessionData] = useState(null);
 
+  // ERP Configuration - hardcoded for demo, replace with your actual values
+  const erpConfig = {
+    url: 'https://erp.wgroup.vn',
+    apiEndpoint: '/jsonrpc',
+    database: 'erp',
+  };
+
   useEffect(() => {
-    setIsMounted(true);
-    setCurrentTime(new Date());
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
-    checkStatus();
     requestLocation();
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (isLoggedIn && sessionData) {
+      checkStatus();
+    }
+  }, [isLoggedIn, sessionData]);
 
   // Lấy vị trí GPS
   const requestLocation = () => {
@@ -45,6 +47,48 @@ export default function AttendanceApp() {
         }
       );
     }
+  };
+
+  // Mock API cho demo
+  const mockErpApi = (method, params) => {
+    return new Promise((resolve) => {
+      setTimeout(() => {
+        if (method === 'call' && params.service === 'common' && params.method === 'authenticate') {
+          if (params.args[1] && params.args[2]) {
+            resolve({
+              uid: 1,
+              session_id: 'mock_session_' + Date.now()
+            });
+          } else {
+            throw new Error('Thông tin đăng nhập không hợp lệ');
+          }
+        } else if (method === 'call' && params.service === 'object') {
+          if (params.method === 'execute_kw') {
+            const action = params.args[4];
+            
+            if (action === 'check_in') {
+              resolve({
+                success: true,
+                id: Date.now(),
+                time: new Date().toISOString()
+              });
+            } else if (action === 'check_out') {
+              resolve({
+                success: true,
+                id: Date.now(),
+                time: new Date().toISOString()
+              });
+            } else if (action === 'get_status') {
+              resolve({
+                status: status || 'checked-out',
+                last_update: new Date().toISOString()
+              });
+            }
+          }
+        }
+        resolve({});
+      }, 500);
+    });
   };
 
   // Gọi JSON-RPC API
@@ -85,42 +129,6 @@ export default function AttendanceApp() {
     }
   };
 
-  // Mock API cho demo (xóa khi deploy production)
-  const mockErpApi = (method, params) => {
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        if (method === 'call' && params.service === 'common' && params.method === 'authenticate') {
-          if (params.args[1] && params.args[2]) {
-            resolve({
-              uid: 1,
-              session_id: 'mock_session_' + Date.now()
-            });
-          } else {
-            throw new Error('Thông tin đăng nhập không hợp lệ');
-          }
-        } else if (method === 'call' && params.service === 'object') {
-          if (params.method === 'execute_kw') {
-            const [, , , model, action] = params.args;
-            
-            if (action === 'check_in' || action === 'check_out') {
-              resolve({
-                success: true,
-                id: Date.now(),
-                time: new Date().toISOString()
-              });
-            } else if (action === 'get_status') {
-              resolve({
-                status: status || 'checked-out',
-                last_update: new Date().toISOString()
-              });
-            }
-          }
-        }
-        resolve({});
-      }, 500);
-    });
-  };
-
   // Đăng nhập Odoo
   const handleLogin = async () => {
     if (!username || !password) {
@@ -132,8 +140,6 @@ export default function AttendanceApp() {
     setMessage('');
 
     try {
-      // Gửi tọa độ GPS (nếu có) trong tham số authenticate
-      console.log('Login attempt', { username, login_lati: location.lat, login_longti: location.lng });
       const result = await callErpApi('call', {
         service: 'common',
         method: 'authenticate',
@@ -141,14 +147,9 @@ export default function AttendanceApp() {
           erpConfig.database,
           username,
           password,
-          {
-            login_lati: location.lat,
-            login_longti: location.lng
-          }
+          {}
         ]
       });
-
-      console.log('Login response', result);
 
       if (result && result.uid) {
         setSessionData({
@@ -160,11 +161,9 @@ export default function AttendanceApp() {
         setMessage('Đăng nhập thành công');
         setPassword('');
       } else {
-        console.log('Login failed', result);
         setMessage('Đăng nhập thất bại');
       }
     } catch (error) {
-      console.error('Login error', error);
       setMessage(error.message || 'Lỗi kết nối ERP server');
     } finally {
       setLoading(false);
@@ -281,31 +280,7 @@ export default function AttendanceApp() {
     }
   };
 
-  const handleLogout = async () => {
-    // Thông báo logout kèm tọa độ nếu có session
-    if (sessionData) {
-      try {
-        await callErpApi('call', {
-          service: 'object',
-          method: 'execute_kw',
-          args: [
-            erpConfig.database,
-            sessionData.uid,
-            password,
-            'hr.attendance',
-            'logout',
-            [],
-            {
-              logout_lati: location.lat,
-              logout_longti: location.lng
-            }
-          ]
-        });
-      } catch (err) {
-        console.warn('Không thể gửi thông tin logout:', err.message || err);
-      }
-    }
-
+  const handleLogout = () => {
     setIsLoggedIn(false);
     setUsername('');
     setPassword('');
@@ -331,9 +306,7 @@ export default function AttendanceApp() {
             </div>
             <h1 className="text-3xl font-bold text-gray-800">Chấm Công ERP</h1>
             <p className="text-gray-600 mt-2">Đăng nhập bằng tài khoản ERP</p>
-            {erpConfig.url !== 'https://your-erp.com' && (
-              <p className="text-xs text-gray-500 mt-2">Server: {erpConfig.url}</p>
-            )}
+            <p className="text-xs text-gray-400 mt-2">Demo mode - Server: {erpConfig.url}</p>
           </div>
 
           <div className="space-y-4">
@@ -428,15 +401,15 @@ export default function AttendanceApp() {
             <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl p-6 mb-6">
               <div className="text-center">
                 <div className="text-4xl font-bold text-gray-800">
-                  {isMounted && currentTime ? currentTime.toLocaleTimeString('vi-VN') : '--:--:--'}
+                  {currentTime.toLocaleTimeString('vi-VN')}
                 </div>
                 <div className="text-gray-600 mt-2">
-                  {isMounted && currentTime ? currentTime.toLocaleDateString('vi-VN', { 
+                  {currentTime.toLocaleDateString('vi-VN', { 
                     weekday: 'long', 
                     year: 'numeric', 
                     month: 'long', 
                     day: 'numeric' 
-                  }) : ''}
+                  })}
                 </div>
               </div>
             </div>
