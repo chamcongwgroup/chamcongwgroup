@@ -7,7 +7,8 @@ export default async function handler(req, res) {
   const { username, password } = req.body;
 
   try {
-    // Gọi ERP API để authenticate
+    // Gọi ERP API để authenticate, chuyển tiếp meta (vd. tọa độ) nếu có
+    const meta = req.body.meta || {};
     const response = await fetch(`${process.env.NEXT_PUBLIC_ERP_URL}/jsonrpc`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -17,7 +18,7 @@ export default async function handler(req, res) {
         params: {
           service: 'common',
           method: 'authenticate',
-          args: [process.env.NEXT_PUBLIC_ODOO_DB, username, password, {}]
+          args: [process.env.NEXT_PUBLIC_ODOO_DB, username, password, meta]
         },
         id: Date.now()
       })
@@ -26,7 +27,8 @@ export default async function handler(req, res) {
     const data = await response.json();
 
     if (data.result) {
-      res.status(200).json({ success: true, uid: data.result });
+      // forward full result for client-side handling (may include session_id)
+      res.status(200).json({ success: true, result: data.result });
     } else {
       res.status(401).json({ success: false, message: 'Login failed' });
     }

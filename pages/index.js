@@ -93,38 +93,41 @@ export default function AttendanceApp() {
 
   // Gọi JSON-RPC API
   const callErpApi = async (method, params = {}) => {
-    const apiUrl = `${erpConfig.url}${erpConfig.apiEndpoint}`;
-    
-    const request = {
-      jsonrpc: '2.0',
-      method: method,
-      params: params,
-      id: Date.now()
-    };
-
+    // Use internal API routes to avoid CORS when calling external ERP
     try {
-      const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(sessionData && { 'X-Session-Id': sessionData.session_id }),
-        },
-        body: JSON.stringify(request),
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+      // authentication
+      if (method === 'call' && params.service === 'common' && params.method === 'authenticate') {
+        const [{}, username, password, meta] = params.args;
+        const resp = await fetch('/api/auth', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password, meta })
+        });
+        if (!resp.ok) throw new Error(`Auth API HTTP ${resp.status}`);
+        return await resp.json();
       }
 
-      const data = await response.json();
+      // object execute_kw -> use attendance API for check_in/check_out or generic proxy
+      if (method === 'call' && params.service === 'object' && params.method === 'execute_kw') {
+        const args = params.args || [];
+        // args: [db, uid, password, model, action, [], payload]
+        const [, uid, , model, action] = args;
+        const payload = args[6] || {};
 
-      if (data.error) {
-        throw new Error(data.error.message || 'ERP API Error');
+        const resp = await fetch('/api/attendance', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action, uid, ...payload })
+        });
+
+        if (!resp.ok) throw new Error(`Attendance API HTTP ${resp.status}`);
+        return await resp.json();
       }
 
-      return data.result;
+      // Default: fallback to mock
+      return await mockErpApi(method, params);
     } catch (error) {
-      // Fallback to mock data for demo
+      console.error('callErpApi error', error);
       return mockErpApi(method, params);
     }
   };

@@ -4,10 +4,13 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { action, uid, address, latitude, longitude } = req.body;
+  // Accept flexible payload including address, latitude/longitude, login_/logout_ coords
+  const { action, uid, address } = req.body;
+  const latitude = req.body.latitude || req.body.login_lati || req.body.logout_lati || null;
+  const longitude = req.body.longitude || req.body.login_longti || req.body.logout_longti || null;
 
   try {
-    const response = await fetch(`${process.env.NEXT_PUBLIC_ERP_URL}/jsonrpc`, {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_ERP_URL}/jsonrpc`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -21,9 +24,9 @@ export default async function handler(req, res) {
             uid,
             '',
             'hr.attendance',
-            action, // 'check_in' or 'check_out'
-            [],
-            { address, latitude, longitude }
+              action, // 'check_in' or 'check_out' or 'logout'
+              [],
+              { address, latitude, longitude }
           ]
         },
         id: Date.now()
