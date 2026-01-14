@@ -1,12 +1,12 @@
 // Cấu hình kết nối ERP
 const erpConfig = {
   domain: {
-    url: process.env.NEXT_PUBLIC_ERP_URL || 'https://default-erp.com',
+    url: process.env.NEXT_PUBLIC_ERP_URL || 'https://erp.wgroup.vn',
     apiEndpoint: process.env.NEXT_PUBLIC_ERP_API_ENDPOINT || '/jsonrpc',
   },
   
   odoo: {
-    database: process.env.NEXT_PUBLIC_ODOO_DB || 'default_db',
+    database: process.env.NEXT_PUBLIC_ODOO_DB || 'erp',
   },
   
   methods: {

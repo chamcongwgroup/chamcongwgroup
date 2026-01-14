@@ -1,5 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Clock, LogIn, LogOut, MapPin, User, Lock, AlertCircle, CheckCircle } from 'lucide-react';
+import { Clock, LogIn, LogOut, MapPin, User, Lock, AlertCircle, CheckCircle, Navigation } from 'lucide-react';
+
+// ERP Configuration (use server/client-consistent values)
+const erpConfig = {
+  url: process.env.NEXT_PUBLIC_ERP_URL || 'https://your-erp.com',
+  apiEndpoint: process.env.NEXT_PUBLIC_ERP_API_ENDPOINT || '/jsonrpc',
+  database: process.env.NEXT_PUBLIC_ODOO_DB || 'your_db',
+};
 
 export default function AttendanceApp() {
   const [username, setUsername] = useState('');
@@ -9,15 +16,41 @@ export default function AttendanceApp() {
   const [status, setStatus] = useState(null);
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
-  const [currentTime, setCurrentTime] = useState(new Date());
+  const [currentTime, setCurrentTime] = useState(null);
+  const [isMounted, setIsMounted] = useState(false);
+  const [location, setLocation] = useState({ lat: null, lng: null });
+  const [sessionData, setSessionData] = useState(null);
 
   useEffect(() => {
+    setIsMounted(true);
+    setCurrentTime(new Date());
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     checkStatus();
+    requestLocation();
     return () => clearInterval(timer);
   }, []);
 
-  const makeJsonRpcRequest = async (method, params = {}) => {
+  // Lấy vị trí GPS
+  const requestLocation = () => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          setLocation({
+            lat: position.coords.latitude,
+            lng: position.coords.longitude
+          });
+        },
+        (error) => {
+          console.log('GPS không khả dụng:', error.message);
+        }
+      );
+    }
+  };
+
+  // Gọi JSON-RPC API
+  const callErpApi = async (method, params = {}) => {
+    const apiUrl = `${erpConfig.url}${erpConfig.apiEndpoint}`;
+    
     const request = {
       jsonrpc: '2.0',
       method: method,
@@ -25,101 +58,120 @@ export default function AttendanceApp() {
       id: Date.now()
     };
 
-    // Giả lập API call - trong production, thay bằng endpoint thực
+    try {
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(sessionData && { 'X-Session-Id': sessionData.session_id }),
+        },
+        body: JSON.stringify(request),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      if (data.error) {
+        throw new Error(data.error.message || 'ERP API Error');
+      }
+
+      return data.result;
+    } catch (error) {
+      // Fallback to mock data for demo
+      return mockErpApi(method, params);
+    }
+  };
+
+  // Mock API cho demo (xóa khi deploy production)
+  const mockErpApi = (method, params) => {
     return new Promise((resolve) => {
       setTimeout(() => {
-        if (method === 'auth.login') {
-          if (params.username && params.password) {
+        if (method === 'call' && params.service === 'common' && params.method === 'authenticate') {
+          if (params.args[1] && params.args[2]) {
             resolve({
-              jsonrpc: '2.0',
-              result: {
-                success: true,
-                message: 'Đăng nhập thành công',
-                user: { username: params.username, role: 'employee' }
-              },
-              id: request.id
+              uid: 1,
+              session_id: 'mock_session_' + Date.now()
             });
           } else {
-            resolve({
-              jsonrpc: '2.0',
-              error: { code: -32600, message: 'Thông tin đăng nhập không hợp lệ' },
-              id: request.id
-            });
+            throw new Error('Thông tin đăng nhập không hợp lệ');
           }
-        } else if (method === 'attendance.checkIn') {
-          if (params.address) {
-            resolve({
-              jsonrpc: '2.0',
-              result: {
+        } else if (method === 'call' && params.service === 'object') {
+          if (params.method === 'execute_kw') {
+            const [, , , model, action] = params.args;
+            
+            if (action === 'check_in' || action === 'check_out') {
+              resolve({
                 success: true,
-                message: 'Chấm công vào thành công',
-                time: new Date().toISOString(),
-                address: params.address
-              },
-              id: request.id
-            });
-          } else {
-            resolve({
-              jsonrpc: '2.0',
-              error: { code: -32602, message: 'Địa chỉ là bắt buộc' },
-              id: request.id
-            });
+                id: Date.now(),
+                time: new Date().toISOString()
+              });
+            } else if (action === 'get_status') {
+              resolve({
+                status: status || 'checked-out',
+                last_update: new Date().toISOString()
+              });
+            }
           }
-        } else if (method === 'attendance.checkOut') {
-          if (params.address) {
-            resolve({
-              jsonrpc: '2.0',
-              result: {
-                success: true,
-                message: 'Chấm công ra thành công',
-                time: new Date().toISOString(),
-                address: params.address
-              },
-              id: request.id
-            });
-          } else {
-            resolve({
-              jsonrpc: '2.0',
-              error: { code: -32602, message: 'Địa chỉ là bắt buộc' },
-              id: request.id
-            });
-          }
-        } else if (method === 'attendance.status') {
-          resolve({
-            jsonrpc: '2.0',
-            result: {
-              isCheckedIn: isLoggedIn,
-              lastUpdate: new Date().toISOString()
-            },
-            id: request.id
-          });
         }
+        resolve({});
       }, 500);
     });
   };
 
-  const handleLogin = async (e) => {
-    e.preventDefault();
+  // Đăng nhập Odoo
+  const handleLogin = async () => {
+    if (!username || !password) {
+      setMessage('Vui lòng nhập đầy đủ thông tin');
+      return;
+    }
+
     setLoading(true);
     setMessage('');
 
     try {
-      const response = await makeJsonRpcRequest('auth.login', { username, password });
-      
-      if (response.result && response.result.success) {
+      // Gửi tọa độ GPS (nếu có) trong tham số authenticate
+      console.log('Login attempt', { username, login_lati: location.lat, login_longti: location.lng });
+      const result = await callErpApi('call', {
+        service: 'common',
+        method: 'authenticate',
+        args: [
+          erpConfig.database,
+          username,
+          password,
+          {
+            login_lati: location.lat,
+            login_longti: location.lng
+          }
+        ]
+      });
+
+      console.log('Login response', result);
+
+      if (result && result.uid) {
+        setSessionData({
+          uid: result.uid,
+          session_id: result.session_id,
+          username: username
+        });
         setIsLoggedIn(true);
-        setMessage(response.result.message);
+        setMessage('Đăng nhập thành công');
         setPassword('');
-      } else if (response.error) {
-        setMessage(response.error.message);
+      } else {
+        console.log('Login failed', result);
+        setMessage('Đăng nhập thất bại');
       }
     } catch (error) {
-      setMessage('Lỗi kết nối server');
+      console.error('Login error', error);
+      setMessage(error.message || 'Lỗi kết nối ERP server');
     } finally {
       setLoading(false);
     }
   };
 
+  // Chấm công vào
   const handleCheckIn = async () => {
     if (!address.trim()) {
       setMessage('Vui lòng nhập địa chỉ');
@@ -130,22 +182,38 @@ export default function AttendanceApp() {
     setMessage('');
 
     try {
-      const response = await makeJsonRpcRequest('attendance.checkIn', { address });
-      
-      if (response.result && response.result.success) {
+      const result = await callErpApi('call', {
+        service: 'object',
+        method: 'execute_kw',
+        args: [
+          erpConfig.database,
+          sessionData.uid,
+          password,
+          'hr.attendance',
+          'check_in',
+          [],
+          {
+            address: address,
+            latitude: location.lat,
+            longitude: location.lng,
+            check_in: new Date().toISOString()
+          }
+        ]
+      });
+
+      if (result && result.success) {
         setStatus('checked-in');
-        setMessage(response.result.message + ' lúc ' + new Date(response.result.time).toLocaleTimeString('vi-VN'));
+        setMessage('Chấm công vào thành công lúc ' + new Date().toLocaleTimeString('vi-VN'));
         setAddress('');
-      } else if (response.error) {
-        setMessage(response.error.message);
       }
     } catch (error) {
-      setMessage('Lỗi kết nối server');
+      setMessage(error.message || 'Lỗi chấm công');
     } finally {
       setLoading(false);
     }
   };
 
+  // Chấm công ra
   const handleCheckOut = async () => {
     if (!address.trim()) {
       setMessage('Vui lòng nhập địa chỉ');
@@ -156,40 +224,101 @@ export default function AttendanceApp() {
     setMessage('');
 
     try {
-      const response = await makeJsonRpcRequest('attendance.checkOut', { address });
-      
-      if (response.result && response.result.success) {
+      const result = await callErpApi('call', {
+        service: 'object',
+        method: 'execute_kw',
+        args: [
+          erpConfig.database,
+          sessionData.uid,
+          password,
+          'hr.attendance',
+          'check_out',
+          [],
+          {
+            address: address,
+            latitude: location.lat,
+            longitude: location.lng,
+            check_out: new Date().toISOString()
+          }
+        ]
+      });
+
+      if (result && result.success) {
         setStatus('checked-out');
-        setMessage(response.result.message + ' lúc ' + new Date(response.result.time).toLocaleTimeString('vi-VN'));
+        setMessage('Chấm công ra thành công lúc ' + new Date().toLocaleTimeString('vi-VN'));
         setAddress('');
-      } else if (response.error) {
-        setMessage(response.error.message);
       }
     } catch (error) {
-      setMessage('Lỗi kết nối server');
+      setMessage(error.message || 'Lỗi chấm công');
     } finally {
       setLoading(false);
     }
   };
 
+  // Kiểm tra trạng thái
   const checkStatus = async () => {
+    if (!sessionData) return;
+
     try {
-      const response = await makeJsonRpcRequest('attendance.status');
-      if (response.result) {
-        setStatus(response.result.isCheckedIn ? 'checked-in' : 'checked-out');
+      const result = await callErpApi('call', {
+        service: 'object',
+        method: 'execute_kw',
+        args: [
+          erpConfig.database,
+          sessionData.uid,
+          password,
+          'hr.attendance',
+          'get_status',
+          []
+        ]
+      });
+
+      if (result && result.status) {
+        setStatus(result.status);
       }
     } catch (error) {
       console.error('Lỗi kiểm tra trạng thái');
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    // Thông báo logout kèm tọa độ nếu có session
+    if (sessionData) {
+      try {
+        await callErpApi('call', {
+          service: 'object',
+          method: 'execute_kw',
+          args: [
+            erpConfig.database,
+            sessionData.uid,
+            password,
+            'hr.attendance',
+            'logout',
+            [],
+            {
+              logout_lati: location.lat,
+              logout_longti: location.lng
+            }
+          ]
+        });
+      } catch (err) {
+        console.warn('Không thể gửi thông tin logout:', err.message || err);
+      }
+    }
+
     setIsLoggedIn(false);
     setUsername('');
     setPassword('');
     setAddress('');
     setStatus(null);
+    setSessionData(null);
     setMessage('Đã đăng xuất');
+  };
+
+  const handleKeyPress = (e, action) => {
+    if (e.key === 'Enter') {
+      action();
+    }
   };
 
   if (!isLoggedIn) {
@@ -201,10 +330,13 @@ export default function AttendanceApp() {
               <Clock className="w-8 h-8 text-blue-600" />
             </div>
             <h1 className="text-3xl font-bold text-gray-800">Chấm Công ERP</h1>
-            <p className="text-gray-600 mt-2">Đăng nhập để tiếp tục</p>
+            <p className="text-gray-600 mt-2">Đăng nhập bằng tài khoản ERP</p>
+            {erpConfig.url !== 'https://your-erp.com' && (
+              <p className="text-xs text-gray-500 mt-2">Server: {erpConfig.url}</p>
+            )}
           </div>
 
-          <form onSubmit={handleLogin} className="space-y-4">
+          <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Tài khoản ERP
@@ -215,9 +347,9 @@ export default function AttendanceApp() {
                   type="text"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
+                  onKeyPress={(e) => handleKeyPress(e, handleLogin)}
                   className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   placeholder="Nhập tài khoản"
-                  required
                 />
               </div>
             </div>
@@ -232,9 +364,9 @@ export default function AttendanceApp() {
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
+                  onKeyPress={(e) => handleKeyPress(e, handleLogin)}
                   className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   placeholder="Nhập mật khẩu"
-                  required
                 />
               </div>
             </div>
@@ -249,7 +381,7 @@ export default function AttendanceApp() {
             )}
 
             <button
-              type="submit"
+              onClick={handleLogin}
               disabled={loading}
               className="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 transition-colors disabled:bg-gray-400 flex items-center justify-center gap-2"
             >
@@ -260,7 +392,7 @@ export default function AttendanceApp() {
                 </>
               )}
             </button>
-          </form>
+          </div>
         </div>
       </div>
     );
@@ -275,6 +407,12 @@ export default function AttendanceApp() {
               <div>
                 <h1 className="text-2xl font-bold">Chấm Công</h1>
                 <p className="text-blue-100 mt-1">Xin chào, {username}</p>
+                {location.lat && (
+                  <p className="text-xs text-blue-200 mt-1 flex items-center gap-1">
+                    <Navigation className="w-3 h-3" />
+                    GPS: {location.lat.toFixed(6)}, {location.lng.toFixed(6)}
+                  </p>
+                )}
               </div>
               <button
                 onClick={handleLogout}
@@ -290,15 +428,15 @@ export default function AttendanceApp() {
             <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl p-6 mb-6">
               <div className="text-center">
                 <div className="text-4xl font-bold text-gray-800">
-                  {currentTime.toLocaleTimeString('vi-VN')}
+                  {isMounted && currentTime ? currentTime.toLocaleTimeString('vi-VN') : '--:--:--'}
                 </div>
                 <div className="text-gray-600 mt-2">
-                  {currentTime.toLocaleDateString('vi-VN', { 
+                  {isMounted && currentTime ? currentTime.toLocaleDateString('vi-VN', { 
                     weekday: 'long', 
                     year: 'numeric', 
                     month: 'long', 
                     day: 'numeric' 
-                  })}
+                  }) : ''}
                 </div>
               </div>
             </div>
