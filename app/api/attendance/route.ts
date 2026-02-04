@@ -6,29 +6,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { type, lat, lng } = body;
 
-    // 1️⃣ Ping: chỉ kiểm tra session
-    if (type === "ping") {
-      const pingRes = await fetch(
-        `${process.env.ODOO_BASE_URL}/web/session/get_session_info`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Cookie: cookie,
-          },
-          body: JSON.stringify({ jsonrpc: "2.0", params: {} }),
-        }
-      );
-
-      const pingData = await pingRes.json();
-      if (!pingData.result?.uid) {
-        return new Response("Unauthorized", { status: 401 });
-      }
-
-      return Response.json({ alive: true });
-    }
-
-    // 2️⃣ Get session (uid)
+    // 1️⃣ Check session
     const sessionRes = await fetch(
       `${process.env.ODOO_BASE_URL}/web/session/get_session_info`,
       {
@@ -48,7 +26,7 @@ export async function POST(req: NextRequest) {
       return new Response("Unauthorized", { status: 401 });
     }
 
-    // 3️⃣ Find employee by user_id (CHUẨN – KHÔNG LỖI MULTI-COMPANY)
+    // 2️⃣ Find employee
     const empRes = await fetch(
       `${process.env.ODOO_BASE_URL}/web/dataset/call_kw`,
       {
@@ -62,10 +40,7 @@ export async function POST(req: NextRequest) {
           params: {
             model: "hr.employee",
             method: "search_read",
-            args: [[
-              ["user_id", "=", uid],
-              ["active", "=", true],
-            ]],
+            args: [[["user_id", "=", uid]]],
             kwargs: {
               fields: ["id", "name"],
               limit: 1,
@@ -84,52 +59,101 @@ export async function POST(req: NextRequest) {
 
     const employeeId = employee.id;
 
-    const actionRes = await fetch(
-  `${process.env.ODOO_BASE_URL}/web/dataset/call_kw`,
-  {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Cookie: cookie,
-    },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      params: {
-        model: "hr.attendance",          // ✅ ĐÚNG MODEL
-        method: "action_change",          // ✅ ĐÚNG METHOD
-        args: [],                         // ✅ KHÔNG TRUYỀN employee ở args
-        kwargs: {
-          context: {
-            employee_id: employeeId,     // ✅ TRUYỀN QUA CONTEXT
-            login_lati: lat,
-            login_longti: lng,
-            logout_lati: lat,
-            logout_longti: lng,
-          },
+    // 3️⃣ Find open attendance today
+    const openAttRes = await fetch(
+      `${process.env.ODOO_BASE_URL}/web/dataset/call_kw`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: cookie,
         },
-      },
-    }),
-  }
-);
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          params: {
+            model: "hr.attendance",
+            method: "search_read",
+            args: [[
+              ["employee_id", "=", employeeId],
+              ["check_out", "=", false],
+            ]],
+            kwargs: {
+              fields: ["id", "check_in"],
+              limit: 1,
+            },
+          },
+        }),
+      }
+    );
 
-const actionData = await actionRes.json();
+    const openAttData = await openAttRes.json();
+    const openAttendance = openAttData.result?.[0];
 
-if (actionData.error) {
-  console.error("ODOO ERROR:", actionData.error);
-  return new Response(
-    actionData.error.data?.message || "Odoo attendance error",
-    { status: 400 }
-  );
-}
-    // 5️⃣ Thành công thật sự (Odoo đã xử lý xong)
+    // 4️⃣ CHECK OUT
+    if (openAttendance) {
+      const writeRes = await fetch(
+        `${process.env.ODOO_BASE_URL}/web/dataset/call_kw`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: cookie,
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            params: {
+              model: "hr.attendance",
+              method: "write",
+              args: [[openAttendance.id], {
+                check_out: new Date().toISOString(),
+              }],
+            },
+          }),
+        }
+      );
+
+      const writeData = await writeRes.json();
+      if (writeData.error) throw writeData.error;
+
+      return Response.json({
+        success: true,
+        action: "check_out",
+      });
+    }
+
+    // 5️⃣ CHECK IN
+    const createRes = await fetch(
+      `${process.env.ODOO_BASE_URL}/web/dataset/call_kw`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: cookie,
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          params: {
+            model: "hr.attendance",
+            method: "create",
+            args: [{
+              employee_id: employeeId,
+              check_in: new Date().toISOString(),
+            }],
+          },
+        }),
+      }
+    );
+
+    const createData = await createRes.json();
+    if (createData.error) throw createData.error;
+
     return Response.json({
       success: true,
-      employee: employee.name,
-      result: actionData.result,
+      action: "check_in",
     });
 
   } catch (err: any) {
-    console.error("ATTENDANCE API ERROR:", err);
-    return new Response("Server error", { status: 500 });
+    console.error("ATTENDANCE ERROR:", err);
+    return new Response("Attendance error", { status: 500 });
   }
 }
