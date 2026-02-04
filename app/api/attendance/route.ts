@@ -153,7 +153,10 @@ export async function POST(req: NextRequest) {
     });
 
   } catch (err: any) {
-    console.error("ATTENDANCE ERROR:", err);
-    return new Response("Attendance error", { status: 500 });
+    console.error("ATTENDANCE ERROR RAW:", err);
+    return new Response(
+      JSON.stringify(err, null, 2),
+      { status: 500 }
+    );
   }
 }
