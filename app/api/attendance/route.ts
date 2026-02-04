@@ -84,47 +84,43 @@ export async function POST(req: NextRequest) {
 
     const employeeId = employee.id;
 
-    // 4️⃣ Check-in / Check-out bằng ACTION CHUẨN ODOO
-    // 4️⃣ Check-in / Check-out (Odoo 15 / Community)
     const actionRes = await fetch(
-      `${process.env.ODOO_BASE_URL}/web/dataset/call_kw`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Cookie: cookie,
-        },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          params: {
-            model: "hr.attendance",
-            method: "action_change",
-            args: [],
-            kwargs: {
-              context: {
-                employee_id: employeeId,
-                // GPS (nếu có module custom đọc context)
-                login_lati: lat,
-                login_longti: lng,
-                logout_lati: lat,
-                logout_longti: lng,
-              },
-            },
+  `${process.env.ODOO_BASE_URL}/web/dataset/call_kw`,
+  {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Cookie: cookie,
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      params: {
+        model: "hr.attendance",          // ✅ ĐÚNG MODEL
+        method: "action_change",          // ✅ ĐÚNG METHOD
+        args: [],                         // ✅ KHÔNG TRUYỀN employee ở args
+        kwargs: {
+          context: {
+            employee_id: employeeId,     // ✅ TRUYỀN QUA CONTEXT
+            login_lati: lat,
+            login_longti: lng,
+            logout_lati: lat,
+            logout_longti: lng,
           },
-        }),
-      }
-    );
+        },
+      },
+    }),
+  }
+);
 
-    const actionData = await actionRes.json();
+const actionData = await actionRes.json();
 
-    if (actionData.error) {
-      console.error("ODOO ERROR:", actionData.error);
-      return new Response(
-        actionData.error.data?.message || "Odoo attendance error",
-        { status: 400 }
-      );
-    }
-
+if (actionData.error) {
+  console.error("ODOO ERROR:", actionData.error);
+  return new Response(
+    actionData.error.data?.message || "Odoo attendance error",
+    { status: 400 }
+  );
+}
     // 5️⃣ Thành công thật sự (Odoo đã xử lý xong)
     return Response.json({
       success: true,
