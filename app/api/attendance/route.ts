@@ -1,110 +1,137 @@
-export async function POST(req: Request) {
-  
-  const cookie = req.headers.get("cookie") ?? "";
-  const { type, lat, lng } = await req.json();
-  console.log("COOKIE FROM BROWSER:", req.headers.get("cookie"));
+import { NextRequest } from "next/server";
 
-  // Get session
-  const session = await fetch(
-    `${process.env.ODOO_BASE_URL}/web/session/get_session_info`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Cookie: cookie },
-      body: JSON.stringify({ jsonrpc: "2.0", params: {} }),
+export async function POST(req: NextRequest) {
+  try {
+    const cookie = req.headers.get("cookie") || "";
+    const body = await req.json();
+    const { type, lat, lng } = body;
+
+    // 1️⃣ Ping: chỉ kiểm tra session
+    if (type === "ping") {
+      const pingRes = await fetch(
+        `${process.env.ODOO_BASE_URL}/web/session/get_session_info`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: cookie,
+          },
+          body: JSON.stringify({ jsonrpc: "2.0", params: {} }),
+        }
+      );
+
+      const pingData = await pingRes.json();
+      if (!pingData.result?.uid) {
+        return new Response("Unauthorized", { status: 401 });
+      }
+
+      return Response.json({ alive: true });
     }
-  ).then(r => r.json());
 
-  const uid = session.result?.uid;
-  if (!uid) return new Response("Unauthorized", { status: 401 });
-
-  // Get employee_id
-  const empRes = await fetch(
-  `${process.env.ODOO_BASE_URL}/web/dataset/call_kw`,
-  {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Cookie: cookie,
-    },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      params: {
-        model: "hr.employee",
-        method: "search_read",
-        args: [[
-          ["user_id", "=", uid],
-          ["active", "=", true],
-        ]],
-        kwargs: {
-          fields: ["id", "name", "company_id"],
-          limit: 1,
+    // 2️⃣ Get session (uid)
+    const sessionRes = await fetch(
+      `${process.env.ODOO_BASE_URL}/web/session/get_session_info`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: cookie,
         },
-      },
-    }),
-  }
-);
+        body: JSON.stringify({ jsonrpc: "2.0", params: {} }),
+      }
+    );
 
-const empData = await empRes.json();
-const employee = empData.result?.[0];
+    const sessionData = await sessionRes.json();
+    const uid = sessionData.result?.uid;
 
-if (!employee) {
-  return new Response("No employee", { status: 400 });
-}
+    if (!uid) {
+      return new Response("Unauthorized", { status: 401 });
+    }
 
-const employeeId = employee.id;
-
-  if (type === "checkin") {
-    await fetch(`${process.env.ODOO_BASE_URL}/web/dataset/call_kw`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Cookie: cookie },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        params: {
-          model: "hr.attendance",
-          method: "create",
-          args: [{ employee_id: employeeId, login_lati: lat, login_longti: lng }],
-        },
-      }),
-    });
-  }
-
-  if (type === "checkout") {
-    const att = await fetch(
+    // 3️⃣ Find employee by user_id (CHUẨN – KHÔNG LỖI MULTI-COMPANY)
+    const empRes = await fetch(
       `${process.env.ODOO_BASE_URL}/web/dataset/call_kw`,
       {
         method: "POST",
-        headers: { "Content-Type": "application/json", Cookie: cookie },
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: cookie,
+        },
         body: JSON.stringify({
           jsonrpc: "2.0",
           params: {
-            model: "hr.attendance",
+            model: "hr.employee",
             method: "search_read",
             args: [[
-              ["employee_id", "=", employeeId],
-              ["check_out", "=", false],
+              ["user_id", "=", uid],
+              ["active", "=", true],
             ]],
-            kwargs: { fields: ["id"], limit: 1 },
+            kwargs: {
+              fields: ["id", "name"],
+              limit: 1,
+            },
           },
         }),
       }
-    ).then(r => r.json());
+    );
 
-    const attId = att.result?.[0]?.id;
-    if (attId) {
-      await fetch(`${process.env.ODOO_BASE_URL}/web/dataset/call_kw`, {
+    const empData = await empRes.json();
+    const employee = empData.result?.[0];
+
+    if (!employee) {
+      return new Response("No employee", { status: 400 });
+    }
+
+    const employeeId = employee.id;
+
+    // 4️⃣ Check-in / Check-out bằng ACTION CHUẨN ODOO
+    const actionRes = await fetch(
+      `${process.env.ODOO_BASE_URL}/web/dataset/call_kw`,
+      {
         method: "POST",
-        headers: { "Content-Type": "application/json", Cookie: cookie },
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: cookie,
+        },
         body: JSON.stringify({
           jsonrpc: "2.0",
           params: {
-            model: "hr.attendance",
-            method: "write",
-            args: [[attId], { logout_lati: lat, logout_longti: lng }],
+            model: "hr.employee",
+            method: "attendance_action_change",
+            args: [[employeeId]],
+            kwargs: {
+              context: {
+                // Nếu bạn có custom field GPS, Odoo module sẽ đọc context này
+                login_lati: lat,
+                login_longti: lng,
+                logout_lati: lat,
+                logout_longti: lng,
+              },
+            },
           },
         }),
-      });
-    }
-  }
+      }
+    );
 
-  return Response.json({ success: true });
+    const actionData = await actionRes.json();
+
+    if (actionData.error) {
+      console.error("ODOO ERROR:", actionData.error);
+      return new Response(
+        actionData.error.data?.message || "Odoo attendance error",
+        { status: 400 }
+      );
+    }
+
+    // 5️⃣ Thành công thật sự (Odoo đã xử lý xong)
+    return Response.json({
+      success: true,
+      employee: employee.name,
+      result: actionData.result,
+    });
+
+  } catch (err: any) {
+    console.error("ATTENDANCE API ERROR:", err);
+    return new Response("Server error", { status: 500 });
+  }
 }
