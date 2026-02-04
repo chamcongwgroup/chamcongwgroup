@@ -85,6 +85,7 @@ export async function POST(req: NextRequest) {
     const employeeId = employee.id;
 
     // 4️⃣ Check-in / Check-out bằng ACTION CHUẨN ODOO
+    // 4️⃣ Check-in / Check-out (Odoo 15 / Community)
     const actionRes = await fetch(
       `${process.env.ODOO_BASE_URL}/web/dataset/call_kw`,
       {
@@ -96,12 +97,13 @@ export async function POST(req: NextRequest) {
         body: JSON.stringify({
           jsonrpc: "2.0",
           params: {
-            model: "hr.employee",
-            method: "attendance_action_change",
-            args: [[employeeId]],
+            model: "hr.attendance",
+            method: "action_change",
+            args: [],
             kwargs: {
               context: {
-                // Nếu bạn có custom field GPS, Odoo module sẽ đọc context này
+                employee_id: employeeId,
+                // GPS (nếu có module custom đọc context)
                 login_lati: lat,
                 login_longti: lng,
                 logout_lati: lat,
