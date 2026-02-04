@@ -18,24 +18,40 @@ export async function POST(req: Request) {
   if (!uid) return new Response("Unauthorized", { status: 401 });
 
   // Get employee_id
-  const user = await fetch(
-    `${process.env.ODOO_BASE_URL}/web/dataset/call_kw`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Cookie: cookie },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        params: {
-          model: "res.users",
-          method: "read",
-          args: [[uid], ["employee_id"]],
+  const empRes = await fetch(
+  `${process.env.ODOO_BASE_URL}/web/dataset/call_kw`,
+  {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Cookie: cookie,
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      params: {
+        model: "hr.employee",
+        method: "search_read",
+        args: [[
+          ["user_id", "=", uid],
+          ["active", "=", true],
+        ]],
+        kwargs: {
+          fields: ["id", "name", "company_id"],
+          limit: 1,
         },
-      }),
-    }
-  ).then(r => r.json());
+      },
+    }),
+  }
+);
 
-  const employeeId = user.result?.[0]?.employee_id?.[0];
-  if (!employeeId) return new Response("No employee", { status: 400 });
+const empData = await empRes.json();
+const employee = empData.result?.[0];
+
+if (!employee) {
+  return new Response("No employee", { status: 400 });
+}
+
+const employeeId = employee.id;
 
   if (type === "checkin") {
     await fetch(`${process.env.ODOO_BASE_URL}/web/dataset/call_kw`, {
